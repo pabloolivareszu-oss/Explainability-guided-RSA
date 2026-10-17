@@ -1,95 +1,130 @@
-# Explainability-guided-RSA
+# Campaña bSHAP-RSA: CEC 2022 + BBOB, semillas pareadas
 
-# Shapley-Guided Reptile Search Algorithm
+Paquete autocontenido. Tres archivos de código y este README.
 
-Research materials for **“Explainability-guided diversity control for the Reptile Search Algorithm in continuous optimization.”**
-
-This study examines how Shapley attribution can guide diversity reinjection in population-based optimization. The proposed method, **SG-RSA**, uses individual contributions to select which solutions to replace and where to place their replacements.
-
-## Method
-
-SG-RSA defines a cooperative game over the current population. Coalition value combines spatial coverage with solution quality, and Shapley values are estimated through permutation sampling.
-
-At each scheduled intervention, the method:
-
-1. Protects the best individuals.
-2. Selects non-elite individuals with low estimated contributions for replacement.
-3. Selects anchors from individuals with high estimated contributions.
-4. Generates replacement solutions around those anchors.
-
-Attribution uses existing positions and objective values. Replacement evaluations count toward the same objective-evaluation budget as ordinary search moves.
-
-The intervention scores come directly from the population game. A separate surrogate analysis is used only to examine recorded reinjection outcomes.
-
-## Compared variants
-
-| Variant | Role |
+| Archivo | Qué hace |
 |---|---|
-| RSA | Base Reptile Search Algorithm. |
-| RSA-SR | Stagnation-triggered reinjection with attribution-guided selection. |
-| RSA-SR-rand | Stagnation-triggered reinjection with random selection. |
-| UR | Periodic reinjection with random selection. |
-| SR-gov | Reinjection controlled by population spread. |
-| SG-gate | Attribution controls intervention timing and replacement size. |
-| SG-RSA | Periodic reinjection with attribution-guided replacement and anchor selection. |
+| `bshap_core.py` | Núcleo algorítmico (RSA, estado conductual, SHAP por permutaciones, ablaciones, reinicio adaptativo). Misma lógica de búsqueda que `smoke_bshap_rsa.py`; añade checkpoints de error a 16 fracciones de MaxFES y parada temprana para BBOB. |
+| `benchmarks.py` | Backends CEC 2022 (`opfunu`) y BBOB (`cocoex`), presupuestos estándar y semilla pareada por celda. |
+| `run_campaign.py` | Runner: smoke / pilot / full, paralelo, escritura incremental, reanudable. |
+| `analyze_campaign.py` | Wilcoxon pareado por celda, better/equal/worse, rangos, Friedman, costo, tabla booktabs. |
+| `validate_campaign.py` | `audit`: corre celdas con presupuestos adversarios y comprueba que no hay evaluaciones fuera del contador. `check`: integridad de un `results.csv`. |
 
-## Experimental protocol
+## Instalación
 
-The evaluation uses two benchmark families:
+```bash
+pip install numpy scipy pandas opfunu coco-experiment cocopp
+```
 
-| Benchmark | Functions | Dimensions | Repetitions or instances | Evaluation budget |
-|---|---:|---|---|---|
-| CEC 2022 | 12 | 10 and 20 | 30 repetitions per function | 200,000 evaluations at D = 10; 1,000,000 at D = 20 |
-| Noiseless BBOB | 24 | 5, 10, and 20 | Instances 1–15 | 10,000 × D evaluations |
+Probado con Python 3.12, opfunu 1.0.1, cocoex 2.8.2.
 
-The campaign covers **96 function–dimension cells** and **12,600 runs** across seven variants.
+## Diseño experimental
 
-Variants share initial populations within each paired comparison. All search evaluations, including reinjections, count toward the corresponding budget. BBOB runs stop early when they reach an error of `1e-8`.
+**CEC 2022** (estándar de la competición): F1–F12, 10D y 20D, MaxFES 200 000 (10D) y 1 000 000 (20D), 30 corridas, error truncado a 0 bajo 1e-8. El error se registra en 16 checkpoints: 0.001, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, …, 1.0 × MaxFES.
 
-The analysis considers final error, convergence, target attainment, paired statistical comparisons, and elapsed solving time.
+**BBOB** (COCO): f1–f24, instancias 1–15, dimensiones 5, 10, 20 por defecto, MaxFES = 10⁴·D por defecto (`--bbob-budget-mult`). El observador de COCO registra la trayectoria completa; `cocopp` produce ECDF, ERT y tablas. Una corrida se detiene al alcanzar el objetivo final (1e-8), como pide COCO.
 
-## Main findings
+**Semillas pareadas.** La semilla depende de `(suite, función, instancia/corrida, dim, maxfes)` y no del algoritmo. Las cinco variantes parten de la misma población inicial y consumen la misma secuencia aleatoria, de modo que el Wilcoxon de rangos con signo por celda es válido. Comprobación rápida: en `results.csv`, `err_at_0.001` es idéntico entre algoritmos de la misma celda.
 
-Periodic reinjection accounts for the largest improvement over the base RSA. Attribution-guided selection provides an additional, problem-dependent benefit.
+**Familia.** `rsa`, `bshap-rsa`, `behavior-q`, `worst-q`, `random-q`. Parámetros por defecto: población 50, `patience` 250 (el valor del mRSA original; con 10 el disparador degeneraba en un calendario), 64 muestras SHAP, reinicio máximo 20 %, élite 5 %.
 
-Compared with unguided periodic reinjection, SG-RSA produces:
+## Tamaño de la campaña completa
 
-- 11 cells with a statistically significant improvement.
-- 84 cells without a detected difference.
-- 1 cell favoring unguided reinjection.
+```
+CEC 2022: 5 alg × 12 f × 2 dim × 30 corridas = 3 600 corridas, 1.8e9 FES
+BBOB:     5 alg × 24 f × 3 dim × 15 inst     = 5 400 corridas, ≤ 1.9e9 FES (menos con parada temprana)
+```
 
-These results support individual-level guidance within the tested intervention design. They do not establish a general advantage for every use of attribution.
+Para las figuras de diagnóstico (waterfall bSHAP, heatmap de φᵢ, antes/después de reinicio) hace falta `--diagnostics-level full` en un piloto pequeño; `summary` basta para la campaña completa y guarda por reinicio los índices seleccionados, el orden de φ, spread y fitness antes/después.
 
-## Experimental environment
+Con el costo medido en la campaña anterior (~40 µs/FES, opfunu puro Python; BBOB en C es más barato), la campaña completa está en el orden de 40–60 horas-CPU: un día en el Mac Studio con 20 trabajadores.
 
-| Component | Version or specification |
-|---|---|
-| Python | 3.11.9, arm64 |
-| NumPy | 2.4.6 |
-| SciPy | 1.17.1 |
-| pandas | 3.0.6 |
-| opfunu | 1.0.4 |
-| cocoex | 2.8.2 |
-| cocopp | 2.9.1 |
-| Hardware | Apple Mac mini, M4 Pro, 14 cores, 48 GB RAM |
-| Operating system | macOS 26.6.2 |
+## Validación obligatoria antes de correr
 
-These versions describe the environment used for the experiments.
+```bash
+python validate_campaign.py audit
+```
 
-## Reproducibility notes
+Ejecuta nueve celdas pequeñas en ambos backends con presupuestos adversarios (50, 51, 777, parada temprana en BBOB 2D, instancia 15, composición F12) y comprueba por corrida que el contador del `Evaluator` nunca supera MaxFES, que coincide con el contador independiente del backend (`opfunu.n_fe`, `cocoex.Problem.evaluations`), que una corrida corta solo ocurre con el objetivo alcanzado, que los 16 checkpoints son no crecientes y terminan en `best_error`, que las cinco variantes comparten semilla y población inicial, y que `rsa` no reinicia.
 
-CEC 2022 results correspond to the opfunu implementation identified above. BBOB results use the COCO platform through cocoex.
+La misma comprobación corre dentro de cada tarea de la campaña: si el contador del backend y el del `Evaluator` difieren, o se supera MaxFES, la tarea lanza `RuntimeError` y la campaña se detiene en vez de escribir una fila contaminada.
 
-Parameter settings were selected in preliminary experiments on seven problems also included in the evaluation. Those problems are therefore in sample for parameter selection.
+Después de cualquier corrida:
 
-Reproducing the reported results requires matching the benchmark implementations, parameter settings, seeds, instances, and evaluation budgets described in the manuscript.
+```bash
+python validate_campaign.py check results/full/results.csv            # campaña en curso
+python validate_campaign.py check results/full/results.csv --strict-cells   # campaña cerrada
+```
 
-## Citation
+Evaluaciones que no cuentan contra MaxFES, declaradas: la sonda de `benchmarks.bbob_fopt` evalúa un punto sobre un objeto `Problem` distinto, solo para leer Fopt del encabezado del logger; el algoritmo nunca ve ese valor.
 
-If you use this work, please cite the accompanying manuscript:
+## Comandos
 
-**Explainability-guided diversity control for the Reptile Search Algorithm in continuous optimization.**
+Validar la matriz sin correr nada:
 
-Pablo Olivares, Franco Villegas, Eduardo Lara, Ricardo Soto, Broderick Crawford, and Rodrigo Olivares.
+```bash
+python run_campaign.py --campaign full --dry-run
+```
 
-Publication details and archival identifiers will be added when available.
+Smoke (CEC 2022 F1 10D y BBOB f1 5D, 3 corridas, presupuesto reducido, `patience` acortada a 10 para que el reinicio se ejercite; ~10 s):
+
+```bash
+python run_campaign.py --campaign smoke --out results/smoke --diagnostics-level summary
+python analyze_campaign.py results/smoke/results.csv
+```
+
+Piloto corto (F1, F6, F9 de CEC 2022 en 10D/20D con 5 corridas; f1, f8, f15, f20 de BBOB en 5D/10D con 5 instancias; presupuestos estándar):
+
+```bash
+python run_campaign.py --campaign pilot --out results/pilot --jobs -1
+python analyze_campaign.py results/pilot/results.csv
+```
+
+Campaña completa (reanudable: si se corta, repetir la misma línea):
+
+```bash
+cd "<carpeta>/bshap_campaign"
+caffeinate -dimsu python run_campaign.py --campaign full --out results/full --jobs 20
+```
+
+En el Mac Studio por ssh, envolver en `bash -lc` y lanzar con `nohup ... > results/full/campana.log 2>&1 < /dev/null & disown`, como en la campaña anterior.
+
+Solo una suite, o solo algunas dimensiones de BBOB:
+
+```bash
+python run_campaign.py --campaign full --suites cec2022 --out results/cec2022
+python run_campaign.py --campaign full --suites bbob --bbob-dims 5,10,20,40 --out results/bbob
+```
+
+## Análisis
+
+```bash
+python analyze_campaign.py results/full/results.csv --ref bshap-rsa --checkpoints 0.1,0.5,1 --latex results/full/bew.tex
+python -m cocopp results/full/exdata/rsa results/full/exdata/bshap-rsa results/full/exdata/behavior-q results/full/exdata/worst-q results/full/exdata/random-q
+```
+
+Criterio de lectura (sección 7 de `CAMPANA_BSHAP.md`): la capa SHAP se sostiene solo si `bshap-rsa` gana simultáneamente a `rsa`, `random-q`, `worst-q` y `behavior-q`. Si solo gana a `rsa`, el resultado sostiene el reinicio adaptativo y no la atribución.
+
+## Salidas
+
+```
+results/<nombre>/
+  results.csv          una fila por corrida: clave, semilla, best_error, evaluations,
+                       backend_evaluations, target_hit, triggers, costos,
+                       err_at_<fracción> para los 16 checkpoints
+  diagnostics.jsonl    solo con --diagnostics-level summary|full: triggers y traza por corrida
+  exdata/<alg>/f##_d##_i##/   datos COCO por tarea; cocopp los fusiona por algoritmo
+```
+
+`results.csv` se escribe por `append` tras cada corrida y es la única fuente para reanudar. Las tareas más caras (mayor MaxFES × D) se encolan primero.
+
+## Qué cambió respecto a `smoke_bshap_rsa.py`
+
+- Semillas sin el nombre del algoritmo (antes `derive_seed(algorithm, …)`), lo que hace válido el análisis pareado.
+- CEC 2022 y BBOB sustituyen a CEC 2014/2017 y a los cuatro presupuestos fijos; con eso desaparecen Katsuura a 50D y el estrato 5×10⁶ que consumían el 70 % del tiempo.
+- 16 checkpoints por corrida en lugar de un único error final.
+- `patience` por defecto 250 en lugar de 10.
+- Escritura incremental: antes se reescribían el CSV y el JSON completos tras cada resultado.
+- `cocoex` 2.8 no expone el óptimo de BBOB; `benchmarks.bbob_fopt` lo lee del encabezado del `.dat` de un problema sonda observado aparte, sin gastar presupuesto del problema real.
+
+Registrar el cambio de benchmarks y presupuestos como desviación del plan firmado, con las cifras de costo de la campaña anterior como justificación.
